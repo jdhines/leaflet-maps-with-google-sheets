@@ -31,6 +31,29 @@ $(window).on('load', function() {
     var lon = map.getCenter().lng, lonSet = false;
     var zoom = 12, zoomSet = false;
     var center;
+    var params = {};
+    window.location.href.replace(/[?&]+([^=&]+)=([^&]*)/gi, function(m, key, value) {
+      params[key] = value;
+    });
+    
+    console.log(params);
+    
+    if (Object.keys(params).length > 1){
+        if (params.lat !== 'undefined') {
+          lat = params.lat;
+          latSet = true;
+        }
+
+        if (params.lon !== 'undefined') {
+          lon = params.lon;
+          lonSet = true;
+        }
+
+        if (params.zoom !== 'undefined') {
+          zoom = params.zoom;
+          zoomSet = true;
+        }
+    }
 
     if (getSetting('_initLat') !== '') {
       lat = getSetting('_initLat');
@@ -60,6 +83,13 @@ $(window).on('load', function() {
     map.setView(center, zoom);
   }
 
+   /**
+   * Sort days of week into proper order.
+   */
+    function daysOfWeekSorter(x,y) {
+      var daysOfWeek = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+      return daysOfWeek.indexOf(x)-daysOfWeek.indexOf(y);
+    }
 
   /**
    * Given a collection of points, determines the layers based on 'Group'
@@ -79,6 +109,9 @@ $(window).on('load', function() {
         group2color[ group ] = points[i]['Marker Icon'].indexOf('.') > 0
           ? points[i]['Marker Icon']
           : points[i]['Marker Color'];
+
+        groups.sort(daysOfWeekSorter);
+        groups.push(group);
       }
     }
 
@@ -117,7 +150,8 @@ $(window).on('load', function() {
         ? L.icon({
           iconUrl: point['Marker Icon'],
           iconSize: size,
-          iconAnchor: anchor
+          iconAnchor: [20,53],
+          popupAnchor: [-1,-10]
         })
         : createMarkerIcon(point['Marker Icon'],
           'fa',
@@ -127,9 +161,8 @@ $(window).on('load', function() {
 
       if (point.Latitude !== '' && point.Longitude !== '') {
         var marker = L.marker([point.Latitude, point.Longitude], {icon: icon})
-          .bindPopup("<b>" + point['Name'] + '</b><br>' +
-          (point['Image'] ? ('<img src="' + point['Image'] + '"><br>') : '') +
-          point['Description']);
+          .bindPopup("<center><b>Region:</b> " + point['Region'] + "</center>" + (point['Image'] ? ('<img src="' + point['Image'] + '"><br>') : ('<img src="/media/f3.png"><br>')) +
+          "<center><h3>" + point['Name'] + '</h3></center><br>' + point['Description']);
 
         if (layers !== undefined && layers.length !== 1) {
           marker.addTo(layers[point.Group]);
@@ -141,18 +174,32 @@ $(window).on('load', function() {
 
     var group = L.featureGroup(markerArray);
     var clusters = (getSetting('_markercluster') === 'on') ? true : false;
+    var mcGroup = L.markerClusterGroup({
+      spiderfyOnMaxZoom: true,
+      showCoverageOnHover: false,
+      zoomToBoundsOnClick: true,
+      maxClusterRadius: 30,
+    });
 
     // if layers.length === 0, add points to map instead of layer
     if (layers === undefined || layers.length === 0) {
       map.addLayer(
         clusters
-        ? L.markerClusterGroup().addLayer(group).addTo(map)
+        ? mcGroup.addLayer(group).addTo(map)
         : group
       );
     } else {
       if (clusters) {
         // Add multilayer cluster support
-        multilayerClusterSupport = L.markerClusterGroup.layerSupport();
+        multilayerClusterSupport = L.markerClusterGroup.layerSupport({
+          spiderfyOnMaxZoom: true,
+          showCoverageOnHover: true,
+          zoomToBoundsOnClick: true,
+          spiderfyDistanceMultiplier: 2,
+          removeOutsideVisibleBounds:true,
+          animate: true,
+          maxClusterRadius: 30,
+        });
         multilayerClusterSupport.addTo(map);
 
         for (i in layers) {
@@ -602,11 +649,17 @@ $(window).on('load', function() {
    * Here all data processing from the spreadsheet happens
    */
   function onMapDataLoad(options, points, polylines) {
-
+    var params = {};
+    window.location.href.replace(/[?&]+([^=&]+)=([^&]*)/gi, function(m, key, value) {
+      params[key] = value;
+    });
     createDocumentSettings(options);
 
     document.title = getSetting('_mapTitle');
     addBaseMap();
+    addWatermark();
+    map.scrollWheelZoom.enable();
+
 
     // Add point markers to the map
     var layers;
@@ -685,7 +738,7 @@ $(window).on('load', function() {
     changeAttribution();
 
     // Append icons to categories in markers legend
-    $('#points-legend input+span').each(function(i) { // add to <span> that follows <input>
+    $('#points-legend label span').each(function(i) {
       var g = $(this).text().trim();
       var legendIcon = (group2color[ g ].indexOf('.') > 0)
         ? '<img src="' + group2color[ g ] + '" class="markers-legend-icon">'
@@ -783,9 +836,6 @@ $(window).on('load', function() {
    * Adds polylines to the map
    */
   function processPolylines(p) {
-
-    var lines = Array(p.length); // array to keep track of loaded geojson polylines
-
     if (!p || p.length == 0) return;
 
     var pos = (getSetting('_polylinesLegendPos') == 'off')
@@ -817,18 +867,19 @@ $(window).on('load', function() {
             }
           }
 
-          var line = L.polyline(latlng, {
+          line = L.polyline(latlng, {
             color: (p[index]['Color'] == '') ? 'grey' : p[index]['Color'],
             weight: trySetting('_polylinesWeight', 2),
             pane: 'shadowPane'
-          })
-          
-          lines[index] = line;
-          line.addTo(map);
+          }).addTo(map);
 
           if (p[index]['Description'] && p[index]['Description'] != '') {
             line.bindPopup(p[index]['Description']);
           }
+
+          polylinesLegend.addOverlay(line,
+            '<i class="color-line" style="background-color:' + p[index]['Color']
+            + '"></i> ' + p[index]['Display Name']);
 
           if (index == 0) {
             if (polylinesLegend._container) {
@@ -852,15 +903,8 @@ $(window).on('load', function() {
             }
           }
 
-          if ( lines.filter(Boolean).length == p.length ) { // only if all polylines loaded
+          if (p.length == index + 1) {
             completePolylines = true;
-
-            // Add polylines to the legend - we do this after all lines are loaded
-            for (let j = 0; j < p.length; j++) {
-              polylinesLegend.addOverlay(lines[j],
-                '<i class="color-line" style="background-color:' + p[j]['Color']
-                + '"></i> ' + p[j]['Display Name']);
-            }
           }
         };
       }(i));
@@ -935,23 +979,35 @@ $(window).on('load', function() {
    * Loads the basemap and adds it to the map
    */
   function addBaseMap() {
-
     var basemap = trySetting('_tileProvider', 'CartoDB.Positron');
-    
     L.tileLayer.provider(basemap, {
-      maxZoom: 18,
-
-      // Pass the api key to most commonly used parameters
-      apiKey: trySetting('_tileProviderApiKey', ''),
-      apikey: trySetting('_tileProviderApiKey', ''),
-      key: trySetting('_tileProviderApiKey', ''),
-      accessToken: trySetting('_tileProviderApiKey', '')
+      maxZoom: 18
     }).addTo(map);
-
     L.control.attribution({
       position: trySetting('_mapAttribution', 'bottomright')
     }).addTo(map);
+  }
 
+  function addWatermark() {
+    L.Control.Watermark = L.Control.extend({
+    onAdd: function(map) {
+    var img = L.DomUtil.create('img');
+      img.src = 'media/f3.png';
+      if (window.matchMedia("only screen and (max-width: 760px)").matches) {
+        img.style.width = '80px';
+      } else {
+        img.style.width = '120px'
+      }
+      return img;
+    },
+    onRemove: function(map) {
+        // Nothing to do here
+    }
+    });
+    L.control.watermark = function(opts) {
+      return new L.Control.Watermark(opts);
+    }
+    L.control.watermark({ position: 'topright' }).addTo(map);
   }
 
   /**
@@ -1135,5 +1191,6 @@ $(window).on('load', function() {
       }
       return val;
   }
+  
 
 });
